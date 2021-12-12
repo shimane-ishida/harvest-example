@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta1/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-giJF6kkoqNQ00vy+HMDP7azOuL0xtbfIcaT9wjKHr8RbDVddVHyTfAAsrekwKmP1" crossorigin="anonymous">
+  <title>ハーベスト量表示</title>
+</head>
+<body>
+  <div id="app">
+    <div class="container">
+      <div class="card mt-3">
+        <div class="card-body">
+          <h5 class="card-title">ハーベスト量表示</h5>
+          <div class="card-text">
+            <div class="mb-3">
+              <label for="address" class="form-label">address</label>
+              <input v-model="address" type="text" class="form-control" id="address" placeholder="Tから始まるテストネットのアドレス39文字" />
+            </div>
+          </div>
+          <button type="button" class="btn btn-primary" @click="getReceipt">ハーベスト量表示</button>
+          <table class="table">
+            <thead>
+              <tr>
+                <th scope="col" style="width: 5%">#</th>
+                <th scope="col">日時</th>
+                <th scope="col">ブロック高</th>
+                <th scope="col">数量</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(receipt ,i) in receipts" :key="`t-key-${i}`">
+                <td>{{ i+1 }}</td>
+                <td>{{ receipt.datetime }}</td>
+                <td>{{ receipt.block }}</td>
+                <td>{{ receipt.amount }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="row">
+            <div class="col">
+              <button v-if="isNext" class="btn btn-link" @click="nextPage">さらに読み込む</button>
+            </div>
+            <div class="col d-flex justify-content-end align-items-center">
+              <template v-if="loading">
+                <div class="text-center">
+                  <div class="spinner-border" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta1/dist/js/bootstrap.bundle.min.js" integrity="sha384-ygbV9kiqUc6oa4msXn9868pTtWMgiQaeYH7/t7LECLbyPA2x65Kgf80OJFdroafW" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vue@2"></script>
+  <script src="https://xembook.github.io/nem2-browserify/symbol-sdk-1.0.2.js"></script>
+  <script src="https://unpkg.com/dayjs@1.8.21/dayjs.min.js"></script>
+  <script>
+    nem = require("/node_modules/symbol-sdk");
+    // const nem = require("symbol-sdk"); //nodeモジュールを使う場合
+    op = require("/node_modules/rxjs/operators");
+
+    var app = new Vue({
+      el: '#app',
+      data: {
+        blockRepo: null,
+        receiptRepo: null,
+        epoch: null,
+        currencyId: '091F837E059AE13C',
+        pageNum: 1,
+        isNext: false,
+        address: '',
+        loading: false,
+        receipts:[],
+      },
+      mounted() {
+        this.createRepo();
+      },
+      methods: {
+        async createRepo(){
+          //リポジトリファクトリ作成
+          const repositoryFactory = new nem.RepositoryFactoryHttp("https://dual-1.nodes-xym.work:3001");
+          //ブロックリポジトリ作成
+          this.blockRepo = repositoryFactory.createBlockRepository();
+          //レシートリポジトリ作成
+          this.receiptRepo = repositoryFactory.createReceiptRepository();
+          //エポックの取得
+          this.epoch =  await repositoryFactory.getEpochAdjustment().toPromise();
+        },
+        async getReceipt(){
+          this.loading = true;
+          const address = nem.Address.createFromRawAddress(this.address);
+          //レシート取得
+          const res = await this.receiptRepo.searchReceipts({
+            targetAddress: address,
+            order: "desc",
+            pageSize: 30,
+            pageNumber: this.pageNum,
+            receiptTypes: [nem.ReceiptType.Harvest_Fee],
+          })
+          .toPromise();
+          for(const statements  of res.data){
+            const filterdReceipts = statements.receipts.filter(item => {
+              if(item.targetAddress){
+                return item.targetAddress.plain() === address.plain();
+              }
+              return false;
+            });
+            for(const receipt of filterdReceipts){
+              this.blockRepo.getBlockByHeight(statements.height).subscribe((b) => {
+                this.receipts.push({
+                  datetime: this.dispTimeStamp(
+                    Number(b.timestamp.toString()),
+                    this.epoch
+                  ),
+                  block: statements.height.lower,
+                  amount: this.dispAmount(receipt.amount, 6),
+                });
+              })
+            }
+          }
+          if(res.isLastPage){
+            this.isNext = false
+          }else{
+            this.isNext = true
+          }
+          this.loading = false;
+        },
+        nextPage(){
+          ++this.pageNum;
+          this.getReceipt();
+        },
+        dispAmount(amount, divisibility){
+          var strNum = amount.toString();
+          if (divisibility > 0) {
+            if (amount < Math.pow(10, divisibility)) {
+              return "0." + this.paddingAmount0(strNum, 0, divisibility);
+            } else {
+              var r = strNum.slice(-divisibility);
+              var l = strNum.substring(0, strNum.length - divisibility);
+              return this.comma3(l) + "." + r;
+            }
+          } else {
+            return this.comma3(strNum);
+          }
+        },
+        comma3(strNum) {
+          return strNum.replace(/(\d)(?=(\d\d\d)+(?!\d))/g, "$1,");
+        },
+        paddingAmount0(val, char, n) {
+          for (; val.length < n; val = char + val);
+          return val;
+        },
+        dispTimeStamp(timeStamp, epoch) {
+          var d = dayjs(timeStamp + epoch * 1000);
+          return d.format('YYYY-MM-DD HH:mm:ss');
+        },
+      },
+    })
+  </script>
+</body>
+</html>
